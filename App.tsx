@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, lazy, Suspense } from 'react';
 import { ChatProvider, useChat } from './context/ChatContext';
 import { SidebarNav } from './components/SidebarNav';
 import { WelcomeDashboardView } from './components/WelcomeDashboardView';
@@ -10,35 +10,38 @@ import { YouProfileView } from './components/YouProfileView';
 import { BusinessSuiteView } from './components/BusinessSuiteView';
 import { CommunitiesView } from './components/CommunitiesView';
 import { CallsView } from './components/CallsView';
-import { MatrixConferenceView } from './components/MatrixConferenceView';
-import { WebRTCCallModal } from './components/WebRTCCallModal';
-import { StatusViewerModal } from './components/StatusViewerModal';
-import { ArchitectureBlueprintModal } from './components/ArchitectureBlueprintModal';
-import { E2EEVerificationModal } from './components/E2EEVerificationModal';
-import { UserVerificationServiceModal } from './components/UserVerificationServiceModal';
-import { UserSwitcherModal } from './components/UserSwitcherModal';
-import { NewChatModal } from './components/NewChatModal';
-import { SettingsModal } from './components/SettingsModal';
-import { JitsiDevOpsHubModal } from './components/JitsiDevOpsHubModal';
-import { UniversalSearchModal } from './components/UniversalSearchModal';
-import { CommandCenterModal } from './components/CommandCenterModal';
-import { BusinessSettingsModal } from './components/business/BusinessSettingsModal';
-import { OnboardingModal } from './components/OnboardingModal';
-import { UserProfileModal } from './components/UserProfileModal';
-import { EditProfileModal } from './components/EditProfileModal';
-import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
-import { WATCheckoutModal } from './components/checkout/WATCheckoutModal';
-import { WATPaymentSuccessModal } from './components/checkout/WATPaymentSuccessModal';
-import { WATPaymentDeclinedModal } from './components/checkout/WATPaymentDeclinedModal';
-import { WATEmailNotificationViewerModal } from './components/checkout/WATEmailNotificationViewerModal';
-import { RealTimeCurrencyExchangeModal } from './components/wallet/RealTimeCurrencyExchangeModal';
+import { StatusStoriesView } from './components/status/StatusStoriesView';
 import { NetworkStatusBar } from './components/NetworkStatusBar';
 import { GlassOrbAction } from './components/GlassOrbAction';
 import { AuthAndOnboardingFlow } from './components/auth/AuthAndOnboardingFlow';
+
+// Code-split heavy modals and auxiliary views for high performance
+const MatrixConferenceView = lazy(() => import('./components/MatrixConferenceView').then(m => ({ default: m.MatrixConferenceView })));
+const WebRTCCallModal = lazy(() => import('./components/WebRTCCallModal').then(m => ({ default: m.WebRTCCallModal })));
+const StatusViewerModal = lazy(() => import('./components/StatusViewerModal').then(m => ({ default: m.StatusViewerModal })));
+const PublishStatusModal = lazy(() => import('./components/status/PublishStatusModal').then(m => ({ default: m.PublishStatusModal })));
+const ArchitectureBlueprintModal = lazy(() => import('./components/ArchitectureBlueprintModal').then(m => ({ default: m.ArchitectureBlueprintModal })));
+const E2EEVerificationModal = lazy(() => import('./components/E2EEVerificationModal').then(m => ({ default: m.E2EEVerificationModal })));
+const UserVerificationServiceModal = lazy(() => import('./components/UserVerificationServiceModal').then(m => ({ default: m.UserVerificationServiceModal })));
+const UserSwitcherModal = lazy(() => import('./components/UserSwitcherModal').then(m => ({ default: m.UserSwitcherModal })));
+const NewChatModal = lazy(() => import('./components/NewChatModal').then(m => ({ default: m.NewChatModal })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
+const JitsiDevOpsHubModal = lazy(() => import('./components/JitsiDevOpsHubModal').then(m => ({ default: m.JitsiDevOpsHubModal })));
+const UniversalSearchModal = lazy(() => import('./components/UniversalSearchModal').then(m => ({ default: m.UniversalSearchModal })));
+const CommandCenterModal = lazy(() => import('./components/CommandCenterModal').then(m => ({ default: m.CommandCenterModal })));
+const BusinessSettingsModal = lazy(() => import('./components/business/BusinessSettingsModal').then(m => ({ default: m.BusinessSettingsModal })));
+const OnboardingModal = lazy(() => import('./components/OnboardingModal').then(m => ({ default: m.OnboardingModal })));
+const UserProfileModal = lazy(() => import('./components/UserProfileModal').then(m => ({ default: m.UserProfileModal })));
+const EditProfileModal = lazy(() => import('./components/EditProfileModal').then(m => ({ default: m.EditProfileModal })));
+const KeyboardShortcutsModal = lazy(() => import('./components/KeyboardShortcutsModal').then(m => ({ default: m.KeyboardShortcutsModal })));
+const RealTimeCurrencyExchangeModal = lazy(() => import('./components/wallet/RealTimeCurrencyExchangeModal').then(m => ({ default: m.RealTimeCurrencyExchangeModal })));
+const WATCheckoutModal = lazy(() => import('./components/checkout/WATCheckoutModal').then(m => ({ default: m.WATCheckoutModal })));
+const WATPaymentSuccessModal = lazy(() => import('./components/checkout/WATPaymentSuccessModal').then(m => ({ default: m.WATPaymentSuccessModal })));
+const WATPaymentDeclinedModal = lazy(() => import('./components/checkout/WATPaymentDeclinedModal').then(m => ({ default: m.WATPaymentDeclinedModal })));
+const WATEmailNotificationViewerModal = lazy(() => import('./components/checkout/WATEmailNotificationViewerModal').then(m => ({ default: m.WATEmailNotificationViewerModal })));
 import {
   Home,
   MessageSquare,
-  Compass,
   Store,
   User,
 } from 'lucide-react';
@@ -85,6 +88,10 @@ const MainAuthenticatedLayout: React.FC = () => {
     setIsEmailViewerOpen,
     viewingEmailNotification,
     openEmailViewer,
+    isPublishStatusModalOpen,
+    setIsPublishStatusModalOpen,
+    statusUploadInitialMode,
+    stories,
   } = useChat();
 
   const totalUnread = rooms.reduce((acc, r) => acc + (r.unreadCount || 0), 0);
@@ -192,23 +199,26 @@ const MainAuthenticatedLayout: React.FC = () => {
           {activeTab === 'you' && <YouProfileView />}
 
           {/* Auxiliary Views */}
-          {activeTab === 'stories' && (
-            <div className="flex-1 flex h-full min-w-0 pb-16 md:pb-0">
-              <ChatList />
-            </div>
-          )}
+          {activeTab === 'stories' && <StatusStoriesView />}
           {activeTab === 'communities' && <CommunitiesView />}
           {activeTab === 'calls' && <CallsView />}
-          {activeTab === 'conference' && <MatrixConferenceView />}
+          {activeTab === 'conference' && (
+            <Suspense fallback={null}>
+              <MatrixConferenceView />
+            </Suspense>
+          )}
         </main>
       </div>
 
       {/* Signature WAT Glass Orb Action Button */}
       <GlassOrbAction />
 
-      {/* Floating Glass Bottom Navigation Bar (< 768px) */}
-      {(!activeRoomId || activeTab !== 'chats') && (
-        <div className="md:hidden fixed bottom-4 inset-x-4 max-w-sm mx-auto bg-white/85 backdrop-blur-2xl border border-black/[0.08] shadow-[0_16px_40px_rgba(0,0,0,0.10)] py-1.5 px-2 rounded-full flex items-center justify-around z-40">
+      {/* Floating Glass Bottom Navigation Bar (< 768px) with Safe-Area Inset */}
+      {(!activeRoomId || activeTab !== 'chats') &&
+        activeTab !== 'business' &&
+        activeTab !== 'calls' &&
+        activeTab !== 'conference' && (
+        <div className="md:hidden fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] inset-x-4 max-w-sm mx-auto bg-white/85 backdrop-blur-2xl border border-black/[0.08] shadow-[0_16px_40px_rgba(0,0,0,0.10)] py-1.5 px-2 rounded-full flex items-center justify-around z-40">
           {/* 0. Home */}
           <button
             onClick={() => {
@@ -248,23 +258,7 @@ const MainAuthenticatedLayout: React.FC = () => {
             {activeTab === 'chats' && <span className="text-xs font-semibold">Chats</span>}
           </button>
 
-          {/* 2. Discover */}
-          <button
-            onClick={() => {
-              setActiveTab('discover');
-              soundEngine.playChime();
-            }}
-            className={`flex items-center gap-1.5 py-1.5 px-3 rounded-full transition-all duration-200 ${
-              activeTab === 'discover'
-                ? 'bg-black text-white shadow-md'
-                : 'text-neutral-500 hover:text-black'
-            }`}
-          >
-            <Compass className="w-4 h-4" />
-            {activeTab === 'discover' && <span className="text-xs font-semibold">Discover</span>}
-          </button>
-
-          {/* 3. Business */}
+          {/* Business */}
           <button
             onClick={() => {
               setActiveTab('business');
@@ -298,93 +292,100 @@ const MainAuthenticatedLayout: React.FC = () => {
         </div>
       )}
 
-      {/* Global Modals & Overlays */}
-      <UniversalSearchModal />
-      <CommandCenterModal />
-      <WebRTCCallModal />
-      <StatusViewerModal />
-      <ArchitectureBlueprintModal />
-      <E2EEVerificationModal />
-      <UserVerificationServiceModal />
-      <UserSwitcherModal />
-      <NewChatModal />
-      <SettingsModal />
-      <BusinessSettingsModal
-        isOpen={isBusinessSettingsOpen}
-        onClose={() => setIsBusinessSettingsOpen(false)}
-        initialSection={businessSettingsSection}
-      />
-      <OnboardingModal
-        isOpen={isOnboardingOpen}
-        onClose={() => setIsOnboardingOpen(false)}
-      />
-      <JitsiDevOpsHubModal />
-      <UserProfileModal
-        user={viewingUserProfile}
-        onClose={() => setViewingUserProfile(null)}
-      />
-      <EditProfileModal
-        isOpen={isEditProfileOpen}
-        onClose={() => setIsEditProfileOpen(false)}
-      />
-      <KeyboardShortcutsModal
-        isOpen={isKeyboardShortcutsOpen}
-        onClose={() => setIsKeyboardShortcutsOpen(false)}
-      />
+      {/* Global Modals & Overlays (Code-split on demand) */}
+      <Suspense fallback={null}>
+        <UniversalSearchModal />
+        <CommandCenterModal />
+        <WebRTCCallModal />
+        <StatusViewerModal />
+        <PublishStatusModal
+          isOpen={isPublishStatusModalOpen}
+          onClose={() => setIsPublishStatusModalOpen(false)}
+          initialMode={statusUploadInitialMode}
+        />
+        <ArchitectureBlueprintModal />
+        <E2EEVerificationModal />
+        <UserVerificationServiceModal />
+        <UserSwitcherModal />
+        <NewChatModal />
+        <SettingsModal />
+        <BusinessSettingsModal
+          isOpen={isBusinessSettingsOpen}
+          onClose={() => setIsBusinessSettingsOpen(false)}
+          initialSection={businessSettingsSection}
+        />
+        <OnboardingModal
+          isOpen={isOnboardingOpen}
+          onClose={() => setIsOnboardingOpen(false)}
+        />
+        <JitsiDevOpsHubModal />
+        <UserProfileModal
+          user={viewingUserProfile}
+          onClose={() => setViewingUserProfile(null)}
+        />
+        <EditProfileModal
+          isOpen={isEditProfileOpen}
+          onClose={() => setIsEditProfileOpen(false)}
+        />
+        <KeyboardShortcutsModal
+          isOpen={isKeyboardShortcutsOpen}
+          onClose={() => setIsKeyboardShortcutsOpen(false)}
+        />
 
-      {/* Real-Time Currency Exchange & Interbank FX Modal */}
-      <RealTimeCurrencyExchangeModal />
+        {/* Real-Time Currency Exchange & Interbank FX Modal */}
+        <RealTimeCurrencyExchangeModal />
 
-      {/* WAT Unified Checkout & Commerce Settlement Modal */}
-      <WATCheckoutModal
-        isOpen={isCheckoutOpen}
-        onClose={() => setIsCheckoutOpen(false)}
-        items={checkoutItems}
-        onPaymentSuccess={(order, emailNotification) => {
-          setLatestOrder(order);
-          setLatestEmailNotification(emailNotification);
-          setIsPaymentSuccessOpen(true);
-        }}
-        onPaymentDeclined={(error, orderId, emailNotification) => {
-          setDeclineErrorMessage(error);
-          setLatestEmailNotification(emailNotification || null);
-          setIsPaymentDeclinedOpen(true);
-        }}
-      />
+        {/* WAT Unified Checkout & Commerce Settlement Modal */}
+        <WATCheckoutModal
+          isOpen={isCheckoutOpen}
+          onClose={() => setIsCheckoutOpen(false)}
+          items={checkoutItems}
+          onPaymentSuccess={(order, emailNotification) => {
+            setLatestOrder(order);
+            setLatestEmailNotification(emailNotification);
+            setIsPaymentSuccessOpen(true);
+          }}
+          onPaymentDeclined={(error, orderId, emailNotification) => {
+            setDeclineErrorMessage(error);
+            setLatestEmailNotification(emailNotification || null);
+            setIsPaymentDeclinedOpen(true);
+          }}
+        />
 
-      {/* WAT Premium Payment Successful Modal */}
-      <WATPaymentSuccessModal
-        isOpen={isPaymentSuccessOpen}
-        onClose={() => setIsPaymentSuccessOpen(false)}
-        order={latestOrder}
-        emailNotification={latestEmailNotification}
-        onViewEmail={(email) => openEmailViewer(email)}
-        onContinueShopping={() => {
-          setIsPaymentSuccessOpen(false);
-          setActiveTab('business');
-        }}
-      />
+        {/* WAT Premium Payment Successful Modal */}
+        <WATPaymentSuccessModal
+          isOpen={isPaymentSuccessOpen}
+          onClose={() => setIsPaymentSuccessOpen(false)}
+          order={latestOrder}
+          emailNotification={latestEmailNotification}
+          onViewEmail={(email) => openEmailViewer(email)}
+          onContinueShopping={() => {
+            setIsPaymentSuccessOpen(false);
+            setActiveTab('business');
+          }}
+        />
 
-      {/* WAT Payment Declined / Failed Modal */}
-      <WATPaymentDeclinedModal
-        isOpen={isPaymentDeclinedOpen}
-        onClose={() => setIsPaymentDeclinedOpen(false)}
-        errorMessage={declineErrorMessage}
-        orderId={declineOrderId}
-        emailNotification={latestEmailNotification}
-        onViewEmail={(email) => openEmailViewer(email)}
-        onRetryWithDifferentMethod={() => {
-          setIsPaymentDeclinedOpen(false);
-          setIsCheckoutOpen(true);
-        }}
-      />
+        {/* WAT Payment Declined / Failed Modal */}
+        <WATPaymentDeclinedModal
+          isOpen={isPaymentDeclinedOpen}
+          onClose={() => setIsPaymentDeclinedOpen(false)}
+          errorMessage={declineErrorMessage}
+          orderId={declineOrderId}
+          emailNotification={latestEmailNotification}
+          onViewEmail={(email) => openEmailViewer(email)}
+          onRetryWithDifferentMethod={() => {
+            setIsPaymentDeclinedOpen(false);
+            setIsCheckoutOpen(true);
+          }}
+        />
 
-      {/* WAT Real-time Transactional Email Notification Viewer */}
-      <WATEmailNotificationViewerModal
-        isOpen={isEmailViewerOpen}
-        onClose={() => setIsEmailViewerOpen(false)}
-        email={viewingEmailNotification}
-      />
+        {/* WAT Real-time Transactional Email Notification Viewer */}
+        <WATEmailNotificationViewerModal
+          isOpen={isEmailViewerOpen}
+          onClose={() => setIsEmailViewerOpen(false)}
+          email={viewingEmailNotification}
+        />
+      </Suspense>
     </div>
   );
 };

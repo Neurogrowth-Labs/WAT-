@@ -225,19 +225,46 @@ export interface Message {
   transcription?: string;
 }
 
+export type StoryContentType = 'image' | 'video' | 'audio' | 'text' | 'file';
+
 export interface StoryStatus {
   id: string;
   userId: string;
   userName: string;
   userAvatar: string;
-  type: 'image' | 'text';
+  type: StoryContentType;
   contentUrl?: string;
+  fileName?: string;
+  fileSize?: string;
+  mimeType?: string;
   text?: string;
   caption?: string;
   bgColor?: string;
   timestamp: number;
   viewed: boolean;
   viewsCount: number;
+  isPrivate?: boolean; // When true: Viewers can view/play/read, but cannot download or save to device storage
+  reactions?: Record<string, number>; // emoji -> count, e.g. { '❤️': 4, '🔥': 2 }
+  userReaction?: string; // current user's reaction
+  isReshare?: boolean;
+  resharedFrom?: {
+    userId: string;
+    userName: string;
+    userAvatar: string;
+    originalStoryId?: string;
+    originalCaption?: string;
+  };
+  isRemix?: boolean;
+  remixedFrom?: {
+    userId: string;
+    userName: string;
+    userAvatar: string;
+    originalStoryId?: string;
+    originalCaption?: string;
+    originalContentUrl?: string;
+    originalType?: StoryContentType;
+    originalText?: string;
+  };
 }
 
 export interface CommunitySpace {
