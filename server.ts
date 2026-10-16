@@ -29,56 +29,176 @@ function getGeminiClient(): GoogleGenAI | null {
   return aiClient;
 }
 
-// Helper to call Gemini with model fallback and automatic retry on transient errors (503 / 429)
+// Rate limiting cooldown tracker and in-memory caches
+const modelCooldowns = new Map<string, number>();
+const smartRepliesCache = new Map<string, { replies: string[]; timestamp: number }>();
+const summaryCache = new Map<string, { summary: string; timestamp: number }>();
+
+function isModelInCooldown(model: string): boolean {
+  const expiry = modelCooldowns.get(model);
+  if (!expiry) return false;
+  if (Date.now() >= expiry) {
+    modelCooldowns.delete(model);
+    return false;
+  }
+  return true;
+}
+
+function setModelCooldown(model: string, delayMs: number = 60000) {
+  modelCooldowns.set(model, Date.now() + Math.max(delayMs, 10000));
+}
+
+// Helper to call Gemini with model fallback, circuit-breaking on quota/429, and automatic retry on 503
 async function generateGeminiWithFallback(
   client: GoogleGenAI,
   params: {
     contents: any;
     config?: any;
   },
-  models: string[] = ['gemini-3.8-flash', 'gemini-flash-latest']
+  models: string[] = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest']
 ): Promise<{ text: string; model: string }> {
   let lastError: any = null;
 
   for (const model of models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const response = await client.models.generateContent({
-          model,
-          contents: params.contents,
-          config: params.config,
-        });
-        return {
-          text: response.text || '',
-          model,
-        };
-      } catch (err: any) {
-        lastError = err;
-        const errMsg = String(err?.message || '');
-        const errStatus = err?.status || err?.code || (err?.error && err.error.code);
-        const isTransient =
-          errStatus === 503 ||
-          errStatus === 429 ||
-          errMsg.includes('503') ||
-          errMsg.includes('429') ||
-          errMsg.includes('high demand') ||
-          errMsg.includes('UNAVAILABLE') ||
-          errMsg.includes('RESOURCE_EXHAUSTED');
+    // Skip models currently in a quota exhaustion cooldown window
+    if (isModelInCooldown(model)) {
+      continue;
+    }
 
-        console.warn(`[Gemini] Model ${model} attempt ${attempt + 1} failed (${isTransient ? 'transient' : 'permanent'}):`, errMsg);
+    try {
+      const response = await client.models.generateContent({
+        model,
+        contents: params.contents,
+        config: params.config,
+      });
+      return {
+        text: response.text || '',
+        model,
+      };
+    } catch (err: any) {
+      lastError = err;
+      const errMsg = String(err?.message || '');
+      const errStatus = err?.status || err?.code || (err?.error && err.error.code);
+      const isQuota429 =
+        errStatus === 429 ||
+        errMsg.includes('429') ||
+        errMsg.includes('RESOURCE_EXHAUSTED') ||
+        errMsg.includes('Quota exceeded');
 
-        if (isTransient && attempt === 0) {
-          // Wait 600ms before retrying the same model
-          await new Promise((r) => setTimeout(r, 600));
-          continue;
+      if (isQuota429) {
+        // Parse retryDelay from error or default to 60s
+        let retrySeconds = 60;
+        const match = errMsg.match(/retry in ([0-9.]+)\s*s/i) || errMsg.match(/retryDelay":"([0-9]+)s/i);
+        if (match && match[1]) {
+          retrySeconds = Math.min(Math.ceil(parseFloat(match[1])), 120);
         }
-        // If transient or failed after retry, break inner loop to try next model
-        break;
+        setModelCooldown(model, retrySeconds * 1000);
+        console.info(`[Gemini] Model ${model} free-tier quota cooldown active (${retrySeconds}s). Falling back gracefully.`);
+        // Do NOT retry this model immediately, advance to next model or local fallback
+        continue;
+      }
+
+      const isTransient =
+        errStatus === 503 ||
+        errMsg.includes('503') ||
+        errMsg.includes('high demand') ||
+        errMsg.includes('UNAVAILABLE');
+
+      if (isTransient) {
+        // Brief 600ms backoff before retrying once for transient 503
+        try {
+          await new Promise((r) => setTimeout(r, 600));
+          const retryResp = await client.models.generateContent({
+            model,
+            contents: params.contents,
+            config: params.config,
+          });
+          return {
+            text: retryResp.text || '',
+            model,
+          };
+        } catch (retryErr: any) {
+          lastError = retryErr;
+        }
       }
     }
   }
 
   throw lastError;
+}
+
+// High-speed contextual heuristic generator for smart replies (0ms, 0 API quota)
+function generateLocalSmartReplies(lastMessage: string, context?: string): string[] {
+  const text = (lastMessage || '').trim().toLowerCase();
+
+  if (!text) {
+    return ['Sounds great! 👍', 'Got it, thanks!', 'I will check on this.'];
+  }
+
+  // Greetings
+  if (/^(hi|hello|hey|habari|mambo|salut|bonjour|good\s*(morning|afternoon|evening))/i.test(text)) {
+    return [
+      'Habari! How are you doing today?',
+      'Hey there! Good to hear from you. 👋',
+      'Hello! How can I help you?',
+    ];
+  }
+
+  // Payment, Transactions & Till
+  if (/(pay|paid|payment|transfer|sent|kes|usd|zar|ngn|ghs|shilling|escrow|invoice|till|receipt|order|bought)/i.test(text)) {
+    return [
+      'Payment verified! Thank you 👍',
+      'Processing the transfer right now.',
+      'Confirmed and credited to your account 🙏',
+    ];
+  }
+
+  // Questions
+  if (text.includes('?') || /^(what|how|when|where|why|who|can|could|do|is|are|will|would)/i.test(text)) {
+    return [
+      'Yes, absolutely! 👍',
+      'Let me check on that right away.',
+      'I will follow up in a few minutes.',
+    ];
+  }
+
+  // Calls / Meetings / WebRTC
+  if (/(call|meet|meeting|zoom|webrtc|conference|link|schedule|later|tomorrow)/i.test(text)) {
+    return [
+      'Sounds great, see you then!',
+      'Joining in 2 minutes! 🚀',
+      'Can we push by 15 minutes?',
+    ];
+  }
+
+  // Gratitude
+  if (/(thank|thanks|asante|merci|appreciate|cheers)/i.test(text)) {
+    return [
+      'You are very welcome! 😊',
+      'Anytime! Glad I could help.',
+      'No problem at all! 👍',
+    ];
+  }
+
+  // Confirmation / Agreement
+  if (/(ok|okay|cool|great|done|finished|perfect|awesome|ready|sounds good)/i.test(text)) {
+    return [
+      'Awesome! 👍',
+      'Perfect, talk to you soon!',
+      'All set! Let me know if you need anything else.',
+    ];
+  }
+
+  // Location / En-route
+  if (/(where|location|arrived|here|traffic|heading|on my way)/i.test(text)) {
+    return [
+      'On my way now! 🚗',
+      'Got it, sharing location shortly.',
+      'Be there in 5 minutes! 👍',
+    ];
+  }
+
+  return ['Sounds great! 👍', 'Got it, thanks!', 'I will check on this.'];
 }
 
 function createLocalSummary(messages: any[], roomName?: string): string {
@@ -106,8 +226,6 @@ ${messageSnippets.length > 0 ? messageSnippets.join('\n') : '• Regular sync an
 
 async function startServer() {
   const app = express();
-
-  }
   const configuredPort = Number.parseInt(process.env.PORT || '3000', 10);
   const PORT = Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : 3000;
 
@@ -377,15 +495,30 @@ Keep it concise and crystal clear.`,
     }
   });
 
-  // AI Smart Replies
+  // AI Smart Replies with Instant Heuristic Engine & Quota Protection
   app.post('/api/ai/smart-replies', async (req: Request, res: Response) => {
     const { lastMessage, conversationContext } = req.body;
-    const client = getGeminiClient();
-    const defaultReplies = ['Sounds great! 👍', 'Got it, thanks!', 'I will check on this.'];
+    const msgKey = (lastMessage || '').trim().toLowerCase();
 
-    if (!client) {
+    // Check in-memory cache first (10 min TTL)
+    const cached = smartRepliesCache.get(msgKey);
+    if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
       return res.json({
-        suggestions: defaultReplies,
+        suggestions: cached.replies,
+        source: 'cached',
+      });
+    }
+
+    const localReplies = generateLocalSmartReplies(lastMessage, conversationContext);
+    const client = getGeminiClient();
+
+    // If client is missing or models are in quota cooldown, serve local replies instantly (0ms)
+    const allInCooldown = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'].every(isModelInCooldown);
+    if (!client || allInCooldown) {
+      smartRepliesCache.set(msgKey, { replies: localReplies, timestamp: Date.now() });
+      return res.json({
+        suggestions: localReplies,
+        source: 'heuristic',
       });
     }
 
@@ -396,24 +529,26 @@ Keep it concise and crystal clear.`,
           responseMimeType: 'application/json',
           temperature: 0.7,
         },
-      });
+      }, ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest']);
 
-      let suggestions = defaultReplies;
+      let suggestions = localReplies;
       try {
         const parsed = JSON.parse(result.text || '[]');
         if (Array.isArray(parsed) && parsed.length > 0) {
-          suggestions = parsed.slice(0, 3);
+          suggestions = parsed.slice(0, 3).map((s: any) => String(s).trim());
         }
       } catch (e) {
-        // use default
+        // use localReplies
       }
 
+      smartRepliesCache.set(msgKey, { replies: suggestions, timestamp: Date.now() });
       res.json({ suggestions, source: result.model });
     } catch (error: any) {
-      console.warn('Smart replies fallback engaged:', error?.message || error);
+      // Gracefully serve intelligent local replies without throwing or flooding console
+      smartRepliesCache.set(msgKey, { replies: localReplies, timestamp: Date.now() });
       res.json({
-        suggestions: defaultReplies,
-        source: 'fallback',
+        suggestions: localReplies,
+        source: 'local-fallback',
       });
     }
   });
@@ -548,10 +683,10 @@ Keep it concise and crystal clear.`,
           },
         });
       } catch (err35: any) {
-        console.warn('gemini-3.5-flash search grounding rate/quota limit, falling back to gemini-2.5-flash:', err35?.message);
-        modelUsed = 'gemini-2.5-flash';
+        console.warn('gemini-3.5-flash search grounding rate/quota limit, falling back to gemini-3.1-flash-lite:', err35?.message);
+        modelUsed = 'gemini-3.1-flash-lite';
         response = await client.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.1-flash-lite',
           contents: prompt,
           config: {
             tools: [{ googleSearch: {} }],
@@ -649,10 +784,10 @@ Keep it concise and crystal clear.`,
           config,
         });
       } catch (err35: any) {
-        console.warn('gemini-3.5-flash maps grounding rate/quota limit, falling back to gemini-2.5-flash:', err35?.message);
-        modelUsed = 'gemini-2.5-flash';
+        console.warn('gemini-3.5-flash maps grounding rate/quota limit, falling back to gemini-3.1-flash-lite:', err35?.message);
+        modelUsed = 'gemini-3.1-flash-lite';
         response = await client.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.1-flash-lite',
           contents: query,
           config,
         });
@@ -747,7 +882,7 @@ Keep it concise and crystal clear.`,
           contents: {
             parts: [
               audioPart,
-              {47
+              {
                 text:
                   prompt ||
                   'Transcribe this spoken audio accurately. Output only the verbatim spoken transcription, without any commentary or quotation marks.',
@@ -756,10 +891,10 @@ Keep it concise and crystal clear.`,
           },
         });
       } catch (err35: any) {
-        console.warn('gemini-3.5-transcribe error, falling back to gemini-2.5-flash:', err35?.message);
-        modelUsed = 'gemini-2.5-flash';
+        console.warn('gemini-3.5-transcribe error, falling back to gemini-3.1-flash-lite:', err35?.message);
+        modelUsed = 'gemini-3.1-flash-lite';
         response = await client.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.1-flash-lite',
           contents: {
             parts: [
               audioPart,
@@ -816,6 +951,11 @@ Keep it concise and crystal clear.`,
     const origin = request.headers.origin;
     const host = request.headers.host;
     const accessToken = new URL(request.url || '', `http://${host}`).searchParams.get('access_token') || undefined;
+    const auth = authenticateAccessToken({
+      headers: {
+        authorization: accessToken ? `Bearer ${accessToken}` : (request.headers.authorization as string || ''),
+      },
+    } as any);
 
     if (pathname === '/live' && auth && (!origin || origin === `http://${host}` || origin === `https://${host}`)) {
       wss.handleUpgrade(request, socket, head, (ws) => {
